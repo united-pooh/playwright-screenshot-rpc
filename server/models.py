@@ -5,14 +5,18 @@
 from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
+from enum import IntEnum
+from dataclasses import dataclass
 from pydantic import BaseModel, Field, field_validator
 from config import settings
 
 
 # ── JSON-RPC 基础结构 ─────────────────────────────────────────────────
 
+
 class JsonRpcRequest(BaseModel):
     """标准的 JSON-RPC 2.0 请求外壳。"""
+
     jsonrpc: Literal["2.0"] = "2.0"
     method: str
     params: Optional[dict[str, Any]] = None
@@ -27,6 +31,7 @@ class JsonRpcError(BaseModel):
 
 class JsonRpcResponse(BaseModel):
     """标准的 JSON-RPC 2.0 响应外壳。"""
+
     jsonrpc: Literal["2.0"] = "2.0"
     id: Optional[Union[str, int]] = None
     result: Optional[Any] = None
@@ -35,13 +40,17 @@ class JsonRpcResponse(BaseModel):
 
 # ── 错误代码 (JSON-RPC 标准 + 自定义) ─────────────────────────────────
 
-class ErrorCode:
+
+class ErrorCode(IntEnum):
+    """JSON-RPC 2.0 错误代码枚举。"""
+
     PARSE_ERROR = -32700
     INVALID_REQUEST = -32600
     METHOD_NOT_FOUND = -32601
     INVALID_PARAMS = -32602
     INTERNAL_ERROR = -32603
-    # 自定义错误
+
+    # 自定义截图服务错误
     SCREENSHOT_FAILED = -32001
     BROWSER_ERROR = -32002
     SELECTOR_NOT_FOUND = -32003
@@ -49,6 +58,7 @@ class ErrorCode:
 
 
 # ── 视口模型 ───────────────────────────────────────────────────────────
+
 
 class Viewport(BaseModel):
     width: int = Field(
@@ -67,8 +77,10 @@ class Viewport(BaseModel):
 
 # ── 裁剪区域模型 ─────────────────────────────────────────────────────────
 
+
 class ClipRegion(BaseModel):
     """用于裁剪截图的显式像素矩形。"""
+
     x: float = Field(ge=0)
     y: float = Field(ge=0)
     width: float = Field(gt=0)
@@ -76,6 +88,7 @@ class ClipRegion(BaseModel):
 
 
 # ── 截图参数 (RPC 调用中的 inner params 对象) ───────────────
+
 
 class ScreenshotParams(BaseModel):
     """
@@ -106,9 +119,9 @@ class ScreenshotParams(BaseModel):
       - encoding          : "base64" 或 "binary"；服务器在 JSON 中始终返回 base64，
                             因此这仅控制响应中的标签。
     """
-    
+
     html: str = Field(..., description="要渲染的 HTML 内容")
-    
+
     # 目标定位
     selector: Optional[str] = Field(
         default=None,
@@ -122,9 +135,13 @@ class ScreenshotParams(BaseModel):
         default=False,
         description="捕获整个可滚动页面",
     )
-    
+
     # 渲染设置
     viewport: Viewport = Field(default_factory=Viewport)
+    java_script_enabled: bool = Field(
+        default=True,
+        description="是否允许在页面中运行 JavaScript",
+    )
     wait_until: Literal["load", "domcontentloaded", "networkidle"] = Field(
         default=settings.DEFAULT_WAIT_UNTIL,
     )
@@ -146,7 +163,7 @@ class ScreenshotParams(BaseModel):
         default_factory=list,
         description="截图前在页面上下文中执行的 JS 脚本片段",
     )
-    
+
     # 输出设置
     image_type: Literal["png", "jpeg"] = Field(default=settings.DEFAULT_IMAGE_TYPE)
     quality: int = Field(
@@ -157,7 +174,7 @@ class ScreenshotParams(BaseModel):
     scale: float = Field(default=1.0, ge=0.1, le=4.0)
     omit_background: bool = Field(default=False)
     encoding: Literal["base64", "binary"] = Field(default="base64")
-    
+
     @field_validator("html")
     @classmethod
     def html_not_empty(cls, v: str) -> str:
@@ -168,8 +185,10 @@ class ScreenshotParams(BaseModel):
 
 # ── 截图结果 ─────────────────────────────────────────────────────────
 
+
 class ScreenshotResult(BaseModel):
     """成功时在 JsonRpcResponse.result 中返回。"""
+
     image: str = Field(description="Base64 编码的图像字节")
     image_type: str = Field(description="'png' 或 'jpeg'")
     width: int = Field(description="捕获图像的实际像素宽度")

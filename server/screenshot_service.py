@@ -11,6 +11,7 @@ import io
 import logging
 import struct
 from typing import Optional
+from bs4 import BeautifulSoup
 
 from playwright.async_api import (
     Browser,
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 class ScreenshotServiceError(Exception):
     """当截图操作失败时抛出。"""
+
     def __init__(self, message: str, code: int = ErrorCode.SCREENSHOT_FAILED):
         super().__init__(message)
         self.code = code
@@ -57,14 +59,13 @@ class ScreenshotService:
         async with ScreenshotService() as service:
             result = await service.screenshot(params)
     """
-    
+
     def __init__(self) -> None:
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
-        self._lock = asyncio.Lock()
-    
+        self._semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_SCREENSHOTS)
+
     # ── 生命周期 ─────────────────────────────────────────────────────────────
-    
     async def start(self) -> None:
         """启动 Playwright 和浏览器。"""
         logger.info(
@@ -76,7 +77,7 @@ class ScreenshotService:
         launcher = getattr(self._playwright, settings.BROWSER_TYPE)
         self._browser = await launcher.launch(headless=settings.HEADLESS)
         logger.info("浏览器已成功启动")
-    
+
     async def stop(self) -> None:
         """关闭浏览器并停止 Playwright。"""
         if self._browser:
@@ -86,16 +87,16 @@ class ScreenshotService:
             await self._playwright.stop()
             self._playwright = None
         logger.info("浏览器已停止")
-    
+
     async def __aenter__(self) -> "ScreenshotService":
         await self.start()
         return self
-    
+
     async def __aexit__(self, *_: object) -> None:
         await self.stop()
-    
+
     # ── 公共 API ────────────────────────────────────────────────────────────
-    
+
     async def screenshot(self, params: ScreenshotParams) -> ScreenshotResult:
         """
         在新的浏览器上下文/页面中渲染 *params.html*，
@@ -105,30 +106,29 @@ class ScreenshotService:
         失败时抛出 :class:`ScreenshotServiceError`。
         """
         if self._browser is None:
-            raise ScreenshotServiceError(
-                "浏览器未启动", code=ErrorCode.BROWSER_ERROR
-            )
-        
-        context: Optional[BrowserContext] = None
-        try:
-            context = await self._create_context(params)
-            page = await context.new_page()
-            image_bytes = await self._render_and_capture(page, params)
-        except ScreenshotServiceError:
-            raise
-        except PlaywrightTimeoutError as exc:
-            raise ScreenshotServiceError(str(exc), code=ErrorCode.TIMEOUT) from exc
-        except Exception as exc:
-            logger.exception("截图过程中出现非预期错误")
-            raise ScreenshotServiceError(str(exc)) from exc
-        finally:
-            if context:
-                await context.close()
-        
-        return self._build_result(image_bytes, params.image_type)
-    
+            raise ScreenshotServiceError("浏览器未启动", code=ErrorCode.BROWSER_ERROR)
+
+        async with self._semaphore:
+            context: Optional[BrowserContext] = None
+            try:
+                context = await self._create_context(params)
+                page = await context.new_page()
+                image_bytes = await self._render_and_capture(page, params)
+            except ScreenshotServiceError:
+                raise
+            except PlaywrightTimeoutError as exc:
+                raise ScreenshotServiceError(str(exc), code=ErrorCode.TIMEOUT) from exc
+            except Exception as exc:
+                logger.exception("截图过程中出现非预期错误")
+                raise ScreenshotServiceError(str(exc)) from exc
+            finally:
+                if context:
+                    await context.close()
+
+            return self._build_result(image_bytes, params.image_type)
+
     # ── 内部辅助函数 ───────────────────────────────────────────────────────
-    
+
     async def _create_context(self, params: ScreenshotParams) -> BrowserContext:
         """创建一个根据 *params* 配置的隔离浏览器上下文。"""
         context = await self._browser.new_context(
@@ -138,17 +138,16 @@ class ScreenshotService:
             },
             device_scale_factor=params.scale,
             extra_http_headers=params.extra_http_headers,
+            java_script_enabled=params.java_script_enabled,
         )
         return context
-    
-    async def _render_and_capture(
-            self, page: Page, params: ScreenshotParams
-    ) -> bytes:
+
+    async def _render_and_capture(self, page: Page, params: ScreenshotParams) -> bytes:
         """设置页面内容并捕获截图。"""
-        
+
         # 在加载 HTML 之前注入样式覆盖
         html = self._inject_styles(params.html, params.style_overrides)
-        
+
         logger.debug(
             "正在设置页面内容 (wait_until=%s, timeout=%d ms)",
             params.wait_until,
@@ -159,11 +158,17 @@ class ScreenshotService:
             wait_until=params.wait_until,
             timeout=params.timeout_ms,
         )
-        
+
         # 运行用户提供的任何脚本
         for script in params.scripts:
-            await page.evaluate(script)
-        
+            try:
+                await asyncio.wait_for(page.evaluate(script), timeout=10.0)
+            except asyncio.TimeoutError as exc:
+                logger.warning("脚本执行超时 (10s): %s", script[:100])
+                raise ScreenshotServiceError(
+                    "脚本执行超时 (限时 10s)", code=ErrorCode.TIMEOUT
+                ) from exc
+
         # 如果有要求，等待额外的选择器
         if params.wait_for_selector:
             try:
@@ -176,7 +181,7 @@ class ScreenshotService:
                     f"未找到选择器 '{params.wait_for_selector}': {exc}",
                     code=ErrorCode.SELECTOR_NOT_FOUND,
                 ) from exc
-        
+
         # 构建截图参数
         shot_kwargs: dict = {
             "type": params.image_type,
@@ -185,18 +190,18 @@ class ScreenshotService:
         }
         if params.image_type == "jpeg":
             shot_kwargs["quality"] = params.quality
-        
+
         # 显式裁剪区域具有最高优先级
         if params.clip:
             shot_kwargs["clip"] = self._clip_to_dict(params.clip)
             image_bytes: bytes = await page.screenshot(**shot_kwargs)
-        
+
         # CSS 选择器 → 对匹配的元素进行截图
         elif params.selector:
             element = await page.query_selector(params.selector)
             if element is None:
                 raise ScreenshotServiceError(
-                    f"选择器 '{settings.selector}' 未匹配到任何元素",
+                    f"选择器 '{params.selector}' 未匹配到任何元素",
                     code=ErrorCode.SELECTOR_NOT_FOUND,
                 )
             # 移除 full_page；它不适用于元素截图
@@ -206,27 +211,38 @@ class ScreenshotService:
                 type=params.image_type,
                 quality=params.quality if params.image_type == "jpeg" else None,
             )
-        
+
         # 截取整个页面或视口
         else:
             image_bytes = await page.screenshot(**shot_kwargs)
-        
+
         return image_bytes
-    
+
     # ── 静态辅助函数 ────────────────────────────────────────────────────────
-    
+
     @staticmethod
     def _inject_styles(html: str, css: Optional[str]) -> str:
-        """将 *css* 注入到 HTML 的 <head> 中（或在前面添加 <style> 标签）。"""
+        """使用 BeautifulSoup 安全地将 *css* 注入到 HTML 的 <head> 中。"""
         if not css:
             return html
-        style_tag = f"<style>\n{css}\n</style>"
-        lower = html.lower()
-        head_close = lower.rfind("</head>")
-        if head_close != -1:
-            return html[:head_close] + style_tag + html[head_close:]
-        return style_tag + html
-    
+
+        soup = BeautifulSoup(html, "lxml")
+        style_tag = soup.new_tag("style")
+        style_tag.string = css
+
+        if soup.head:
+            soup.head.append(style_tag)
+        elif soup.html:
+            # 如果没有 <head> 但有 <html>，则创建一个 <head>
+            head = soup.new_tag("head")
+            head.append(style_tag)
+            soup.html.insert(0, head)
+        else:
+            # 既没有 <head> 也没有 <html>，直接将内容包裹
+            return f"<style>\n{css}\n</style>\n{html}"
+
+        return str(soup)
+
     @staticmethod
     def _clip_to_dict(clip: ClipRegion) -> dict:
         return {
@@ -235,7 +251,7 @@ class ScreenshotService:
             "width": clip.width,
             "height": clip.height,
         }
-    
+
     @staticmethod
     def _build_result(image_bytes: bytes, image_type: str) -> ScreenshotResult:
         """解析图像尺寸并封装结果。"""
@@ -252,13 +268,15 @@ class ScreenshotService:
 
 # ── 图像尺寸辅助函数 ───────────────────────────────────────────────────
 
+
 def _parse_image_dimensions(data: bytes, image_type: str) -> tuple[int, int]:
     """返回 PNG 或 JPEG 字节数据的 (宽度, 高度)。"""
     try:
         if image_type == "png":
             return _png_dimensions(data)
         return _jpeg_dimensions(data)
-    except Exception:
+    except Exception as exc:
+        logger.warning("无法解析 %s 图像的尺寸: %s", image_type, exc)
         return 0, 0
 
 
@@ -274,8 +292,8 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
     buf = io.BytesIO(data)
     buf.read(2)  # SOI 标记
     while True:
-        marker, = struct.unpack(">H", buf.read(2))
-        length, = struct.unpack(">H", buf.read(2))
+        (marker,) = struct.unpack(">H", buf.read(2))
+        (length,) = struct.unpack(">H", buf.read(2))
         if marker in (0xFFC0, 0xFFC2):  # SOF0, SOF2
             buf.read(1)  # 精度
             height, width = struct.unpack(">HH", buf.read(4))

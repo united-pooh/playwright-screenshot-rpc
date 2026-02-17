@@ -33,6 +33,7 @@ def _is_valid_base64_png(data: str) -> bool:
 
 # ── 基础截图 ─────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_full_page_png(service):
     params = ScreenshotParams(html="<h1>Hello, Playwright!</h1>")
@@ -56,6 +57,7 @@ async def test_jpeg_output(service):
 
 # ── 选择器截图 ──────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_selector_screenshot(service):
     html = """
@@ -75,10 +77,12 @@ async def test_selector_not_found_raises(service):
     with pytest.raises(ScreenshotServiceError) as exc_info:
         await service.screenshot(params)
     from server.models import ErrorCode
+
     assert exc_info.value.code == ErrorCode.SELECTOR_NOT_FOUND
 
 
 # ── 裁剪区域 ───────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_clip_region(service):
@@ -94,6 +98,7 @@ async def test_clip_region(service):
 
 # ── 样式注入 ───────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_style_injection(service):
     html = "<html><body><p id='t'>text</p></body></html>"
@@ -108,6 +113,7 @@ async def test_style_injection(service):
 
 # ── 视口 ──────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_custom_viewport(service):
     params = ScreenshotParams(
@@ -121,6 +127,7 @@ async def test_custom_viewport(service):
 
 
 # ── 脚本执行 ─────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_script_execution(service):

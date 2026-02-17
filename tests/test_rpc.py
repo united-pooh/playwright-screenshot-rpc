@@ -12,15 +12,16 @@ from server.screenshot_service import ScreenshotService
 
 class FakeScreenshotService(ScreenshotService):
     """极简存根 – 重写 screenshot() 以避免启动 Playwright。"""
-    
+
     async def start(self) -> None:  # noqa: D102
         self._browser = object()  # 真实性的哨兵对象
-    
+
     async def stop(self) -> None:  # noqa: D102
         self._browser = None
-    
+
     async def screenshot(self, params):  # noqa: D102
         from server.models import ScreenshotResult
+
         return ScreenshotResult(
             image="AAAA",
             image_type="png",
@@ -44,14 +45,16 @@ def handler(service):
 
 # ── ping ──────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_ping(handler):
     resp = await handler.handle({"jsonrpc": "2.0", "method": "ping", "id": 1})
-    assert resp["result"] == {"pong": True}
+    assert resp["result"] == {"pong": True, "status": "在线"}
     assert resp["id"] == 1
 
 
 # ── get_methods ───────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_get_methods(handler):
@@ -62,30 +65,36 @@ async def test_get_methods(handler):
 
 # ── screenshot ────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_screenshot_basic(handler):
-    resp = await handler.handle({
-        "jsonrpc": "2.0",
-        "method": "screenshot",
-        "params": {"html": "<h1>Hello</h1>"},
-        "id": 3,
-    })
+    resp = await handler.handle(
+        {
+            "jsonrpc": "2.0",
+            "method": "screenshot",
+            "params": {"html": "<h1>Hello</h1>"},
+            "id": 3,
+        }
+    )
     assert "error" not in resp or resp["error"] is None
     assert resp["result"]["image_type"] == "png"
 
 
 @pytest.mark.asyncio
 async def test_screenshot_missing_html(handler):
-    resp = await handler.handle({
-        "jsonrpc": "2.0",
-        "method": "screenshot",
-        "params": {},
-        "id": 4,
-    })
+    resp = await handler.handle(
+        {
+            "jsonrpc": "2.0",
+            "method": "screenshot",
+            "params": {},
+            "id": 4,
+        }
+    )
     assert resp["error"]["code"] == ErrorCode.INVALID_PARAMS
 
 
 # ── 协议错误 ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_method_not_found(handler):
@@ -101,11 +110,26 @@ async def test_parse_error(handler):
 
 @pytest.mark.asyncio
 async def test_from_raw_bytes(handler):
-    payload = json.dumps({
-        "jsonrpc": "2.0",
-        "method": "ping",
-        "id": "abc",
-    }).encode()
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "ping",
+            "id": "abc",
+        }
+    ).encode()
     resp = await handler.handle(payload)
-    assert resp["result"] == {"pong": True}
+    assert resp["result"] == {"pong": True, "status": "在线"}
     assert resp["id"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_notification(handler):
+    """验证通知请求（没有 ID）不返回响应。"""
+    resp = await handler.handle(
+        {
+            "jsonrpc": "2.0",
+            "method": "ping",
+            # 没有 id 字段
+        }
+    )
+    assert resp is None

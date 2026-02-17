@@ -8,16 +8,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import signal
 import sys
 
 from aiohttp import web
 
 from config import settings
-from rpc_handler import RpcHandler
+from server.rpc_handler import RpcHandler
 from server.screenshot_service import ScreenshotService
 
 # ── 日志设置 ─────────────────────────────────────────────────────────────
@@ -33,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 # ── aiohttp 请求处理程序 ──────────────────────────────────────────────────
 
+
 async def handle_rpc(request: web.Request) -> web.Response:
     """
     处理 ``POST /rpc``。
@@ -40,21 +39,36 @@ async def handle_rpc(request: web.Request) -> web.Response:
     接受 JSON-RPC 2.0 请求体并返回 JSON-RPC 2.0 响应。
     """
     handler: RpcHandler = request.app["rpc_handler"]
-    
+
     try:
-        body = await request.read()
+        # 尝试直接解析 JSON
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        logger.warning("JSON 解析失败: %s", exc)
+        # 返回标准的 JSON-RPC 解析错误
+        from server.models import ErrorCode
+
+        error_resp = RpcHandler._error_response(
+            None, ErrorCode.PARSE_ERROR, f"JSON 解析失败: {exc.msg}"
+        )
+        return web.json_response(error_resp)
     except Exception as exc:
         logger.warning("读取请求体失败: %s", exc)
-        return web.Response(status=400, text="读取请求体失败")
-    
-    response_dict = await handler.handle(body)
-    
-    # 通知没有响应 id – 仍然返回 204 或结果
-    return web.Response(
-        status=200,
-        content_type="application/json",
-        body=json.dumps(response_dict, ensure_ascii=False).encode("utf-8"),
-    )
+        from server.models import ErrorCode
+
+        error_resp = RpcHandler._error_response(
+            None, ErrorCode.INVALID_REQUEST, "读取请求失败"
+        )
+        return web.json_response(error_resp)
+
+    response_dict = await handler.handle(payload)
+
+    # 如果是通知请求（handler 返回 None），则根据规范返回 204
+    if response_dict is None:
+        return web.Response(status=204)
+
+    # 根据 JSON-RPC 2.0 规范，即使是错误，在 HTTP 层通常也返回 200 OK
+    return web.json_response(response_dict)
 
 
 async def handle_health(_request: web.Request) -> web.Response:
@@ -68,18 +82,19 @@ async def handle_health(_request: web.Request) -> web.Response:
 
 # ── 应用工厂 ───────────────────────────────────────────────────────────────
 
+
 def build_app(service: ScreenshotService) -> web.Application:
     """构建并配置 aiohttp 应用程序。"""
     app = web.Application()
     app["screenshot_service"] = service
     app["rpc_handler"] = RpcHandler(service)
-    
+
     app.router.add_get("/", handle_health)
     app.router.add_post("/rpc", handle_rpc)
-    
+
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
-    
+
     return app
 
 
@@ -97,51 +112,28 @@ async def _on_cleanup(app: web.Application) -> None:
 
 # ── 主程序 ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
+    """启动 aiohttp 应用。"""
     service = ScreenshotService()
     app = build_app(service)
-    
+
     logger.info(
-        "正在启动服务器: %s:%d (浏览器=%s)",
+        "正在启动服务器: %s:%d (浏览器=%s, 最大并发=%d)",
         settings.HOST,
         settings.PORT,
         settings.BROWSER_TYPE,
+        settings.MAX_CONCURRENT_SCREENSHOTS,
     )
-    
-    # 收到 SIGTERM / SIGINT 时优雅停机
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    runner = web.AppRunner(app)
-    
-    async def _run() -> None:
-        await runner.setup()
-        site = web.TCPSite(runner, settings.HOST, settings.PORT)
-        await site.start()
-        logger.info("服务器准备就绪 – 监听地址: http://%s:%d/rpc", settings.HOST, settings.PORT)
-        
-        stop_event = asyncio.Event()
-        
-        def _signal_handler() -> None:
-            logger.info("收到停机信号")
-            stop_event.set()
-        
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, _signal_handler)
-            except NotImplementedError:
-                # Windows 不支持为所有信号添加信号处理程序
-                pass
-        
-        await stop_event.wait()
-        logger.info("正在关机...")
-        await runner.cleanup()
-    
-    try:
-        loop.run_until_complete(_run())
-    finally:
-        loop.close()
-        logger.info("服务器已停止")
+
+    # run_app 会自动处理信号 (SIGINT/SIGTERM) 并执行 cleanup 钩子
+    web.run_app(
+        app,
+        host=settings.HOST,
+        port=settings.PORT,
+        print=None,  # 禁用默认的启动打印
+        access_log=None,  # 禁用每条请求的访问日志
+    )
 
 
 if __name__ == "__main__":
