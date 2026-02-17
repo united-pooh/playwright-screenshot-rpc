@@ -16,7 +16,7 @@ from aiohttp import web
 
 from config import settings
 from server.rpc_handler import RpcHandler
-from server.screenshot_service import ScreenshotService
+from server.task_manager import TaskManager
 
 # ── 日志设置 ─────────────────────────────────────────────────────────────
 
@@ -83,11 +83,11 @@ async def handle_health(_request: web.Request) -> web.Response:
 # ── 应用工厂 ───────────────────────────────────────────────────────────────
 
 
-def build_app(service: ScreenshotService) -> web.Application:
+def build_app(task_manager: TaskManager) -> web.Application:
     """构建并配置 aiohttp 应用程序。"""
     app = web.Application()
-    app["screenshot_service"] = service
-    app["rpc_handler"] = RpcHandler(service)
+    app["task_manager"] = task_manager
+    app["rpc_handler"] = RpcHandler(task_manager)
 
     app.router.add_get("/", handle_health)
     app.router.add_post("/rpc", handle_rpc)
@@ -99,15 +99,15 @@ def build_app(service: ScreenshotService) -> web.Application:
 
 
 async def _on_startup(app: web.Application) -> None:
-    service: ScreenshotService = app["screenshot_service"]
-    await service.start()
-    logger.info("截图服务已启动")
+    task_manager: TaskManager = app["task_manager"]
+    await task_manager.connect()
+    logger.info("API 服务已启动，Redis 已连接")
 
 
 async def _on_cleanup(app: web.Application) -> None:
-    service: ScreenshotService = app["screenshot_service"]
-    await service.stop()
-    logger.info("截图服务已停止")
+    task_manager: TaskManager = app["task_manager"]
+    await task_manager.disconnect()
+    logger.info("API 服务已停止，Redis 连接已断开")
 
 
 # ── 主程序 ──────────────────────────────────────────────────────────────────────
@@ -115,15 +115,15 @@ async def _on_cleanup(app: web.Application) -> None:
 
 def main() -> None:
     """启动 aiohttp 应用。"""
-    service = ScreenshotService()
-    app = build_app(service)
+    task_manager = TaskManager()
+    app = build_app(task_manager)
 
     logger.info(
-        "正在启动服务器: %s:%d (浏览器=%s, 最大并发=%d)",
+        "正在启动分布式 API 服务器: %s:%d (Redis=%s:%d)",
         settings.HOST,
         settings.PORT,
-        settings.BROWSER_TYPE,
-        settings.MAX_CONCURRENT_SCREENSHOTS,
+        settings.REDIS_HOST,
+        settings.REDIS_PORT,
     )
 
     # run_app 会自动处理信号 (SIGINT/SIGTERM) 并执行 cleanup 钩子

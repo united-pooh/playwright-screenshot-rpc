@@ -117,10 +117,13 @@ class ScreenshotService:
             except ScreenshotServiceError:
                 raise
             except PlaywrightTimeoutError as exc:
-                raise ScreenshotServiceError(str(exc), code=ErrorCode.TIMEOUT) from exc
+                logger.warning("截图超时: %s", exc)
+                raise ScreenshotServiceError(
+                    "操作超时，请稍后重试", code=ErrorCode.TIMEOUT
+                ) from exc
             except Exception as exc:
                 logger.exception("截图过程中出现非预期错误")
-                raise ScreenshotServiceError(str(exc)) from exc
+                raise ScreenshotServiceError("截图服务内部错误") from exc
             finally:
                 if context:
                     await context.close()
@@ -138,7 +141,7 @@ class ScreenshotService:
             },
             device_scale_factor=params.scale,
             extra_http_headers=params.extra_http_headers,
-            java_script_enabled=params.java_script_enabled,
+            java_script_enabled=False,  # 强制禁用 JS，确保安全
         )
         return context
 
@@ -158,16 +161,6 @@ class ScreenshotService:
             wait_until=params.wait_until,
             timeout=params.timeout_ms,
         )
-
-        # 运行用户提供的任何脚本
-        for script in params.scripts:
-            try:
-                await asyncio.wait_for(page.evaluate(script), timeout=10.0)
-            except asyncio.TimeoutError as exc:
-                logger.warning("脚本执行超时 (10s): %s", script[:100])
-                raise ScreenshotServiceError(
-                    "脚本执行超时 (限时 10s)", code=ErrorCode.TIMEOUT
-                ) from exc
 
         # 如果有要求，等待额外的选择器
         if params.wait_for_selector:

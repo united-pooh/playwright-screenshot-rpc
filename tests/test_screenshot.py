@@ -9,9 +9,18 @@ import struct
 
 import pytest
 import pytest_asyncio
+import asyncio
 
 from server.models import ClipRegion, ScreenshotParams, Viewport
 from server.screenshot_service import ScreenshotService, ScreenshotServiceError
+
+
+@pytest.fixture(scope="module")
+def event_loop():
+    """创建一个模块范围的事件循环实例。"""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -124,18 +133,3 @@ async def test_custom_viewport(service):
     result = await service.screenshot(params)
     assert result.width == 800
     assert result.height == 600
-
-
-# ── 脚本执行 ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_script_execution(service):
-    html = "<html><body><div id='d'>original</div></body></html>"
-    params = ScreenshotParams(
-        html=html,
-        scripts=["document.getElementById('d').textContent = 'modified'"],
-        selector="#d",
-    )
-    result = await service.screenshot(params)
-    assert result.size_bytes > 0

@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     DEFAULT_TIMEOUT_MS: int = 30000
     DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT: int = 10000
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str | None = None
+    REDIS_TASK_QUEUE: str = "screenshot_tasks"
+    REDIS_RESULT_PREFIX: str = "screenshot_result:"
+    REDIS_RESULT_TTL_SECONDS: int = 3600  # 结果保留 1 小时
+
     # ── JSON-RPC ─────────────────────────────────────────────────────────────────
     JSON_RPC_VERSION: str = "2.0"
 

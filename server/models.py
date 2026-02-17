@@ -55,9 +55,20 @@ class ErrorCode(IntEnum):
     BROWSER_ERROR = -32002
     SELECTOR_NOT_FOUND = -32003
     TIMEOUT = -32004
+    JOB_NOT_FOUND = -32005
 
 
-# ── 视口模型 ───────────────────────────────────────────────────────────
+# ── 状态与任务模型 ──────────────────────────────────────────────────
+
+
+JobStatus = Literal["pending", "processing", "success", "failed"]
+
+
+class JobResponse(BaseModel):
+    """异步任务提交后的初始响应。"""
+
+    job_id: str
+    status: JobStatus = "pending"
 
 
 class Viewport(BaseModel):
@@ -138,10 +149,6 @@ class ScreenshotParams(BaseModel):
 
     # 渲染设置
     viewport: Viewport = Field(default_factory=Viewport)
-    java_script_enabled: bool = Field(
-        default=True,
-        description="是否允许在页面中运行 JavaScript",
-    )
     wait_until: Literal["load", "domcontentloaded", "networkidle"] = Field(
         default=settings.DEFAULT_WAIT_UNTIL,
     )
@@ -158,10 +165,6 @@ class ScreenshotParams(BaseModel):
     style_overrides: Optional[str] = Field(
         default=None,
         description="注入到 <head> 的原始 CSS",
-    )
-    scripts: list[str] = Field(
-        default_factory=list,
-        description="截图前在页面上下文中执行的 JS 脚本片段",
     )
 
     # 输出设置
@@ -189,8 +192,21 @@ class ScreenshotParams(BaseModel):
 class ScreenshotResult(BaseModel):
     """成功时在 JsonRpcResponse.result 中返回。"""
 
-    image: str = Field(description="Base64 编码的图像字节")
-    image_type: str = Field(description="'png' 或 'jpeg'")
-    width: int = Field(description="捕获图像的实际像素宽度")
-    height: int = Field(description="捕获图像的实际像素高度")
-    size_bytes: int = Field(description="Base64 编码前的原始字节大小")
+    image: Optional[str] = Field(default=None, description="Base64 编码的图像字节")
+    image_type: Optional[str] = Field(default=None, description="'png' 或 'jpeg'")
+    width: Optional[int] = Field(default=None, description="捕获图像的实际像素宽度")
+    height: Optional[int] = Field(default=None, description="捕获图像的实际像素高度")
+    size_bytes: Optional[int] = Field(
+        default=None, description="Base64 编码前的原始字节大小"
+    )
+    error: Optional[str] = Field(default=None, description="任务执行失败时的错误详情")
+
+
+class JobResult(BaseModel):
+    """查询任务结果时返回的完整模型。"""
+
+    job_id: str
+    status: JobStatus
+    result: Optional[ScreenshotResult] = None
+    created_at: float
+    updated_at: float

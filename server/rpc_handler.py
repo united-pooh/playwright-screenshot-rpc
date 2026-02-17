@@ -14,12 +14,13 @@ from pydantic import ValidationError
 
 from server.models import (
     ErrorCode,
+    JobResponse,
     JsonRpcError,
     JsonRpcRequest,
     JsonRpcResponse,
     ScreenshotParams,
 )
-from server.screenshot_service import ScreenshotService, ScreenshotServiceError
+from server.task_manager import TaskManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,12 @@ def rpc_method(name: str):
 
 class RpcHandler:
     """
-    无状态分发器。请传入一个 :class:`ScreenshotService` 实例；
+    无状态分发器。请传入一个 :class:`TaskManager` 实例；
     使用原始 JSON 字节或字典调用 :meth:`handle`。
     """
 
-    def __init__(self, service: ScreenshotService) -> None:
-        self._service = service
+    def __init__(self, task_manager: TaskManager) -> None:
+        self._task_manager = task_manager
 
     # ── 公共入口点 ────────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ class RpcHandler:
             )
 
         logger.debug("正在执行 RPC 方法: %r (ID: %r)", request.method, request.id)
-        return await handler(self._service, request.params or {})
+        return await handler(self._task_manager, request.params or {})
 
     # ── 辅助函数 ───────────────────────────────────────────────────────────────
 
@@ -150,9 +151,10 @@ class RpcHandler:
 
 
 @rpc_method("screenshot")
-async def _handle_screenshot(service: ScreenshotService, params: dict) -> dict:
+async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
     """
-    执行截图任务。
+    执行截图任务（异步提交）。
+    返回 {"job_id": "...", "status": "pending"}
     """
     try:
         screenshot_params = ScreenshotParams.model_validate(params)
@@ -168,34 +170,36 @@ async def _handle_screenshot(service: ScreenshotService, params: dict) -> dict:
             data={"details": readable_errors},
         ) from exc
 
-    try:
-        result = await service.screenshot(screenshot_params)
-    except ScreenshotServiceError as exc:
-        # 针对不同类型的服务错误提供详细中文提示
-        msg_map = {
-            ErrorCode.BROWSER_ERROR: "浏览器环境异常，请检查服务状态",
-            ErrorCode.TIMEOUT: "页面加载或脚本执行超时",
-            ErrorCode.SELECTOR_NOT_FOUND: "无法在页面中找到指定的 CSS 选择器",
-            ErrorCode.SCREENSHOT_FAILED: "截图操作执行失败",
-        }
-        message = msg_map.get(exc.code, f"截图服务错误: {exc}")
-        raise _RpcError(exc.code, message, data=str(exc)) from exc
+    job_id = await task_manager.submit_task(screenshot_params)
+    return JobResponse(job_id=job_id).model_dump()
 
-    return result.model_dump()
+
+@rpc_method("get_job_status")
+async def _handle_get_job_status(task_manager: TaskManager, params: dict) -> dict:
+    """查询异步任务的状态和结果。"""
+    job_id = params.get("job_id")
+    if not job_id:
+        raise _RpcError(ErrorCode.INVALID_PARAMS, "缺少必填参数: job_id")
+
+    job = await task_manager.get_job(job_id)
+    if not job:
+        raise _RpcError(ErrorCode.JOB_NOT_FOUND, f"找不到任务: {job_id}")
+
+    return job.model_dump()
 
 
 @rpc_method("ping")
 async def _handle_ping(
-    service: ScreenshotService,
+    task_manager: TaskManager,
     params: dict,  # noqa: ARG001
 ) -> dict:
     """健康检查。"""
-    return {"pong": True, "status": "alive"}
+    return {"pong": True, "status": "在线"}
 
 
 @rpc_method("get_methods")
 async def _handle_get_methods(
-    service: ScreenshotService,
+    task_manager: TaskManager,
     params: dict,  # noqa: ARG001
 ) -> dict:
     """返回可用方法列表。"""
