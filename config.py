@@ -1,55 +1,56 @@
 """
 Playwright 截图服务器的全局配置类。
-使用 Pydantic Settings 从环境变量或 .env 加载配置。
+仅定义配置架构，不存储实际参数。
+实际值由根目录下的 .env 文件或环境变量提供。
 """
 
-from typing import Literal
+from typing import Literal, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """
-    配置类，自动从环境变量或 .env 文件加载数据。
+    配置类架构。所有值必须从 .env 或环境变量提供。
     """
 
     # ── 服务器设置 ──────────────────────────────────────────────────────────────
-    HOST: str = "0.0.0.0"
-    PORT: int = 8080
-    MAX_CONCURRENT_SCREENSHOTS: int = 3  # 最大并发截图数
+    HOST: str
+    PORT: int
+    MAX_CONCURRENT_SCREENSHOTS: int
 
     # ── Playwright 设置 ──────────────────────────────────────────────────────────
-    BROWSER_TYPE: Literal["chromium", "firefox", "webkit"] = "chromium"
-    HEADLESS: bool = True
-    VIEWPORT_WIDTH: int = 1280
-    VIEWPORT_HEIGHT: int = 720
+    BROWSER_TYPE: Literal["chromium", "firefox", "webkit"]
+    HEADLESS: bool
+    VIEWPORT_WIDTH: int
+    VIEWPORT_HEIGHT: int
 
     # ── 截图默认值 ──────────────────────────────────────────────────────────────
-    DEFAULT_IMAGE_TYPE: Literal["png", "jpeg"] = "png"
-    DEFAULT_IMAGE_QUALITY: int = 90
-    DEFAULT_WAIT_UNTIL: Literal["load", "domcontentloaded", "networkidle"] = (
-        "networkidle"
-    )
-    DEFAULT_TIMEOUT_MS: int = 30000
-    DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT: int = 10000
+    DEFAULT_IMAGE_TYPE: Literal["png", "jpeg"]
+    DEFAULT_IMAGE_QUALITY: int
+    DEFAULT_WAIT_UNTIL: Literal["load", "domcontentloaded", "networkidle"]
+    DEFAULT_TIMEOUT_MS: int
+    DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT: int
 
     # ── Redis ─────────────────────────────────────────────────────────────────
-    REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
-    REDIS_PASSWORD: str | None = None
-    REDIS_TASK_QUEUE: str = "screenshot_tasks"
-    REDIS_RESULT_PREFIX: str = "screenshot_result:"
-    REDIS_RESULT_TTL_SECONDS: int = 3600  # 结果保留 1 小时
+    REDIS_HOST: str
+    REDIS_PORT: int
+    REDIS_DB: int
+    REDIS_PASSWORD: Optional[str] = None
+    REDIS_TASK_QUEUE: str
+    REDIS_RESULT_PREFIX: str
+    REDIS_RESULT_TTL_SECONDS: int
 
     # ── JSON-RPC ─────────────────────────────────────────────────────────────────
-    JSON_RPC_VERSION: str = "2.0"
+    JSON_RPC_VERSION: str
 
     # ── 日志 ────────────────────────────────────────────────────────────────────
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str
 
     # Pydantic Settings 配置
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
     )
 
 

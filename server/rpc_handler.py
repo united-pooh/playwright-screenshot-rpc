@@ -153,13 +153,11 @@ class RpcHandler:
 @rpc_method("screenshot")
 async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
     """
-    执行截图任务（异步提交）。
-    返回 {"job_id": "...", "status": "pending"}
+    执行截图任务并同步返回结果。
     """
     try:
         screenshot_params = ScreenshotParams.model_validate(params)
     except ValidationError as exc:
-        # 将 Pydantic 的错误信息转换为更友好的格式
         errors = exc.errors()
         readable_errors = [
             f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}" for e in errors
@@ -170,8 +168,29 @@ async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
             data={"details": readable_errors},
         ) from exc
 
+    # 1. 提交任务到队列
     job_id = await task_manager.submit_task(screenshot_params)
-    return JobResponse(job_id=job_id).model_dump()
+
+    # 2. 等待结果 (同步阻塞，直接返回结果)
+    job = await task_manager.wait_for_result(
+        job_id, timeout=int(screenshot_params.timeout_ms / 1000) + 5
+    )
+
+    if not job:
+        raise _RpcError(ErrorCode.TIMEOUT, f"任务执行超时 (ID: {job_id})")
+
+    if job.status == "failed":
+        raise _RpcError(
+            ErrorCode.SCREENSHOT_FAILED,
+            job.result.error if job.result else "任务执行失败",
+            data={"job_id": job_id},
+        )
+
+    # 直接返回结果部分，不带外层 JobResponse 结构
+    if job.result:
+        return job.result.model_dump()
+
+    raise _RpcError(ErrorCode.INTERNAL_ERROR, "任务结果异常")
 
 
 @rpc_method("get_job_status")

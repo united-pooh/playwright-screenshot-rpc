@@ -143,6 +143,18 @@ class ScreenshotService:
             extra_http_headers=params.extra_http_headers,
             java_script_enabled=False,  # 强制禁用 JS，确保安全
         )
+
+        # 阻止所有网络请求以防止 SSRF (服务器端请求伪造)
+        # 仅允许 'data:' 协议（用于 Base64 嵌入资源）
+        await context.route(
+            "**/*",
+            lambda route: (
+                route.continue_()
+                if route.request.url.startswith("data:")
+                else route.abort()
+            ),
+        )
+
         return context
 
     async def _render_and_capture(self, page: Page, params: ScreenshotParams) -> bytes:
@@ -275,20 +287,49 @@ def _parse_image_dimensions(data: bytes, image_type: str) -> tuple[int, int]:
 
 def _png_dimensions(data: bytes) -> tuple[int, int]:
     # PNG: 8 字节签名 + IHDR 块 (长度=4, 类型=4, 然后宽/高各 4 字节)
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("不是有效的 PNG")
-    width, height = struct.unpack(">II", data[16:24])
-    return width, height
+    try:
+        if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("不是有效的 PNG")
+        width, height = struct.unpack(">II", data[16:24])
+        return width, height
+    except Exception as exc:
+        logger.warning("PNG 尺寸解析异常: %s", exc)
+        return 0, 0
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
-    buf = io.BytesIO(data)
-    buf.read(2)  # SOI 标记
-    while True:
-        (marker,) = struct.unpack(">H", buf.read(2))
-        (length,) = struct.unpack(">H", buf.read(2))
-        if marker in (0xFFC0, 0xFFC2):  # SOF0, SOF2
-            buf.read(1)  # 精度
-            height, width = struct.unpack(">HH", buf.read(4))
-            return width, height
-        buf.read(length - 2)
+    try:
+        buf = io.BytesIO(data)
+        if buf.read(2) != b"\xff\xd8":  # SOI 标记
+            return 0, 0
+        while True:
+            marker_data = buf.read(2)
+            if len(marker_data) < 2:
+                break
+            (marker,) = struct.unpack(">H", marker_data)
+            
+            # 读取段长度 (注意：长度包括 2 字节的长度字段本身)
+            length_data = buf.read(2)
+            if len(length_data) < 2:
+                break
+            (length,) = struct.unpack(">H", length_data)
+            
+            if marker in (0xFFC0, 0xFFC1, 0xFFC2):  # SOF0, SOF1, SOF2
+                buf.read(1)  # 精度
+                height_data = buf.read(2)
+                width_data = buf.read(2)
+                if len(height_data) < 2 or len(width_data) < 2:
+                    break
+                height, = struct.unpack(">H", height_data)
+                width, = struct.unpack(">H", width_data)
+                return width, height
+            
+            # 跳过其他段
+            if length > 2:
+                buf.read(length - 2)
+            else:
+                break
+        return 0, 0
+    except Exception as exc:
+        logger.warning("JPEG 尺寸解析异常: %s", exc)
+        return 0, 0
