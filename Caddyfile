@@ -1,0 +1,54 @@
+# ── 全局配置：强制 HTTP 跳转到 HTTPS 时保留方法 (308) ───────────────
+{
+    # 强制所有 HTTP -> HTTPS 跳转使用 308 (保留 POST)
+    servers {
+        protocol {
+            allow_h2c
+        }
+    }
+}
+
+# 主站：unitedpooh.top
+unitedpooh.top {
+    encode gzip zstd
+    root * /var/www/unitedpooh_web
+    file_server
+    log {
+        output file /var/log/caddy/web_access.log
+    }
+}
+
+# API 服务：api.unitedpooh.top
+api.unitedpooh.top {
+    encode gzip zstd
+
+    # 1. 处理 CORS 预检和方法过滤
+    @options method OPTIONS
+    handle @options {
+        header Access-Control-Allow-Origin *
+        header Access-Control-Allow-Methods "POST, GET, OPTIONS"
+        header Access-Control-Allow-Headers "Content-Type"
+        respond "" 204
+    }
+
+    # 2. 只有 /rpc 允许 POST，其他路径根据需要配置
+    handle /rpc {
+        header Access-Control-Allow-Origin *
+        
+        reverse_proxy localhost:8080 {
+            transport http {
+                read_timeout 60s
+            }
+        }
+    }
+
+    # 3. 健康检查 (GET /)
+    handle / {
+        reverse_proxy localhost:8080
+    }
+
+    # 日志记录
+    log {
+        output file /var/log/caddy/api_access.log
+    }
+}

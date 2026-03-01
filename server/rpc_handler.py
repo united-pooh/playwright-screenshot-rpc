@@ -83,10 +83,13 @@ class RpcHandler:
             if rpc_id is None:
                 return None
 
-            return JsonRpcResponse(
+            resp = JsonRpcResponse(
                 id=rpc_id,
                 result=result,
-            ).model_dump()
+            )
+            # 使用 exclude_none=True 以确保符合 JSON-RPC 2.0 规范：
+            # 响应对象必须包含 result 或 error 字段，但不能同时包含两者。
+            return resp.model_dump(exclude_none=True)
 
         except _RpcError as exc:
             return self._error_response(rpc_id, exc.code, exc.message, exc.data)
@@ -141,10 +144,17 @@ class RpcHandler:
         message: str,
         data: Optional[Any] = None,
     ) -> dict:
-        return JsonRpcResponse(
+        resp = JsonRpcResponse(
             id=rpc_id,
             error=JsonRpcError(code=code, message=message, data=data),
-        ).model_dump()
+        )
+        # 即使 rpc_id 为 None，我们也需要将其序列化为 null (如果规范要求)
+        # model_dump(exclude_none=True) 会移除 None。
+        # 但在 JSON-RPC 2.0 中，如果无法检测 id，响应的 id 必须为 null。
+        result = resp.model_dump(exclude_none=True)
+        if "id" not in result:
+            result["id"] = rpc_id  # 显式保留 None (即 JSON 中的 null)
+        return result
 
 
 # ── 方法处理程序 ───────────────────────────────────────────────────────────
@@ -186,9 +196,9 @@ async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
             data={"job_id": job_id},
         )
 
-    # 直接返回结果部分，不带外层 JobResponse 结构
+    # 直接返回结果部分，排除 None 字段以防 result 内部出现 error: null
     if job.result:
-        return job.result.model_dump()
+        return job.result.model_dump(exclude_none=True)
 
     raise _RpcError(ErrorCode.INTERNAL_ERROR, "任务结果异常")
 
@@ -204,7 +214,7 @@ async def _handle_get_job_status(task_manager: TaskManager, params: dict) -> dic
     if not job:
         raise _RpcError(ErrorCode.JOB_NOT_FOUND, f"找不到任务: {job_id}")
 
-    return job.model_dump()
+    return job.model_dump(exclude_none=True)
 
 
 @rpc_method("ping")

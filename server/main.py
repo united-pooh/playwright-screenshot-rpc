@@ -34,11 +34,24 @@ logger = logging.getLogger(__name__)
 
 async def handle_rpc(request: web.Request) -> web.Response:
     """
-    处理 ``POST /rpc``。
-
-    接受 JSON-RPC 2.0 请求体并返回 JSON-RPC 2.0 响应。
+    处理 ``/rpc``。
     """
+    if request.method == "OPTIONS":
+        return web.Response(status=204, headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        })
+
+    if request.method != "POST":
+        return web.json_response({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": f"仅支持 POST 请求，你发送的是 {request.method}"},
+            "id": None
+        }, status=405)
+
     handler: RpcHandler = request.app["rpc_handler"]
+    # ... 原有逻辑 ...
 
     try:
         # 尝试直接解析 JSON
@@ -90,7 +103,7 @@ def build_app(task_manager: TaskManager) -> web.Application:
     app["rpc_handler"] = RpcHandler(task_manager)
 
     app.router.add_get("/", handle_health)
-    app.router.add_post("/rpc", handle_rpc)
+    app.router.add_route("*", "/rpc", handle_rpc)
 
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
