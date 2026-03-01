@@ -223,7 +223,7 @@ async def _handle_ping(
     params: dict,  # noqa: ARG001
 ) -> dict:
     """健康检查。"""
-    return {"pong": True, "status": "在线"}
+    return {"pong": True}
 
 
 @rpc_method("get_methods")
