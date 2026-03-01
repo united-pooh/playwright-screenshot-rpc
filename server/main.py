@@ -37,18 +37,27 @@ async def handle_rpc(request: web.Request) -> web.Response:
     处理 ``/rpc``。
     """
     if request.method == "OPTIONS":
-        return web.Response(status=204, headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        })
+        return web.Response(
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        )
 
     if request.method != "POST":
-        return web.json_response({
-            "jsonrpc": "2.0",
-            "error": {"code": -32600, "message": f"仅支持 POST 请求，你发送的是 {request.method}"},
-            "id": None
-        }, status=405)
+        return web.json_response(
+            {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": f"仅支持 POST 请求，你发送的是 {request.method}",
+                },
+                "id": None,
+            },
+            status=405,
+        )
 
     handler: RpcHandler = request.app["rpc_handler"]
     # ... 原有逻辑 ...

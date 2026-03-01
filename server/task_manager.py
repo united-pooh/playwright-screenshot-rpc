@@ -23,7 +23,9 @@ class TaskManager:
     def _ensure_connected(self) -> None:
         """确保 Redis 已连接。"""
         if self._redis is None:
-            raise ConnectionError("TaskManager is not connected to Redis. Call connect() first.")
+            raise ConnectionError(
+                "TaskManager is not connected to Redis. Call connect() first."
+            )
 
     async def connect(self) -> None:
         """连接到 Redis。"""
@@ -109,7 +111,9 @@ class TaskManager:
 
         await self._set_result(job_id, job)
 
-    async def wait_for_result(self, job_id: str, timeout: int = 30) -> Optional[JobResult]:
+    async def wait_for_result(
+        self, job_id: str, timeout: int = 30
+    ) -> Optional[JobResult]:
         """
         等待任务完成并返回结果。
         """

@@ -307,23 +307,23 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
             if len(marker_data) < 2:
                 break
             (marker,) = struct.unpack(">H", marker_data)
-            
+
             # 读取段长度 (注意：长度包括 2 字节的长度字段本身)
             length_data = buf.read(2)
             if len(length_data) < 2:
                 break
             (length,) = struct.unpack(">H", length_data)
-            
+
             if marker in (0xFFC0, 0xFFC1, 0xFFC2):  # SOF0, SOF1, SOF2
                 buf.read(1)  # 精度
                 height_data = buf.read(2)
                 width_data = buf.read(2)
                 if len(height_data) < 2 or len(width_data) < 2:
                     break
-                height, = struct.unpack(">H", height_data)
-                width, = struct.unpack(">H", width_data)
+                (height,) = struct.unpack(">H", height_data)
+                (width,) = struct.unpack(">H", width_data)
                 return width, height
-            
+
             # 跳过其他段
             if length > 2:
                 buf.read(length - 2)
