@@ -141,16 +141,15 @@ class ScreenshotService:
             },
             device_scale_factor=params.scale,
             extra_http_headers=params.extra_http_headers,
-            java_script_enabled=False,  # 强制禁用 JS，确保安全
+            java_script_enabled=True,  # 启用 JS 以支持脚本执行和现代页面
         )
 
-        # 阻止所有网络请求以防止 SSRF (服务器端请求伪造)
-        # 仅允许 'data:' 协议（用于 Base64 嵌入资源）
+        # 允许 'data:', 'http:', 'https:' 协议，以便加载外部资源
         await context.route(
             "**/*",
             lambda route: (
                 route.continue_()
-                if route.request.url.startswith("data:")
+                if any(route.request.url.startswith(p) for p in ["data:", "http:", "https:"])
                 else route.abort()
             ),
         )
