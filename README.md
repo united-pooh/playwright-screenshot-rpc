@@ -53,6 +53,7 @@ python server/main.py
 | `HEADLESS`         | `true`         | 是否以无头模式运行浏览器                   |
 | `VIEWPORT_WIDTH`   | `1280`         | 默认视口宽度                             |
 | `VIEWPORT_HEIGHT`  | `720`          | 默认视口高度                             |
+| `BROWSER_RESTART_INTERVAL` | `200`   | Worker 中浏览器累计处理多少次截图后主动重建 |
 | `LOG_LEVEL`        | `INFO`         | 日志级别：`DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ---
@@ -227,3 +228,58 @@ pytest tests/test_screenshot.py -v
 # 运行所有测试并生成覆盖率报告
 pytest --cov=server --cov-report=term-missing
 ```
+
+---
+
+## OOM 问题分析
+
+2C2G + 2G Swap 的机器上，这个项目最容易触发 OOM 的点不是 aiohttp，而是长期驻留的 Playwright/Chromium Worker：
+
+1. 浏览器进程会长期运行，渲染复杂 HTML、字体和图片资源后，常见现象是 RSS 持续抬高但不完全回收。
+2. 返回结果是 Base64。图片会同时经历 `bytes -> base64 字符串 -> Redis 临时结果 -> HTTP JSON 响应`，峰值内存会显著高于图片原始大小。
+3. 并发越高，单机上同时存在的页面上下文、截图字节和 Base64 字符串越多。2G 内存机器对突发并发容错很低。
+4. 当前 Worker 是常驻进程，如果浏览器实例长期不轮换，内存碎片和浏览器子进程累积会在数小时或数天后放大，最后被内核 OOM Killer 杀掉。
+
+---
+
+## 避免 OOM 的建议
+
+仓库内已经加入两项直接措施：
+
+1. `ScreenshotService` 现在会按 `BROWSER_RESTART_INTERVAL` 定期重建浏览器实例，避免单个 Chromium 长时间累积内存。
+2. 提供了 `systemd` 服务文件，进程被 OOM 杀掉或服务器重启后会自动拉起。
+
+建议在线上环境这样配置：
+
+```bash
+MAX_CONCURRENT_SCREENSHOTS=1
+BROWSER_RESTART_INTERVAL=100
+DEFAULT_TIMEOUT_MS=15000
+DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT=5000
+```
+
+如果卡片模板经常引用远程图片、Web 字体或复杂阴影/滤镜，建议再做这几件事：
+
+1. 控制输入 HTML 大小，避免超大 base64 图片直接内嵌在 HTML 中。
+2. 尽量把输出改为文件/对象存储，而不是始终走 JSON Base64 返回。
+3. 监控 Worker 进程内存，至少观察 `journalctl`、`systemctl status` 和 `htop`。
+4. Redis 与 Worker 不要和其他重负载服务混布在同一台 2G 机器上。
+
+---
+
+## 作为服务运行
+
+已经新增 `systemd` 单元文件：
+
+- `deploy/systemd/rpc-server-api.service`
+- `deploy/systemd/rpc-server-worker.service`
+
+使用方式见：
+
+- `deploy/systemd/README.md`
+
+核心效果：
+
+1. 服务器重启后自动启动 API 和 Worker。
+2. 进程异常退出后自动重启。
+3. 可以通过 `MemoryMax` 对 API 与 Worker 分别做内存上限约束。

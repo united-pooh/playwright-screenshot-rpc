@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     HEADLESS: bool
     VIEWPORT_WIDTH: int
     VIEWPORT_HEIGHT: int
+    BROWSER_RESTART_INTERVAL: int = 200
 
     # ── 截图默认值 ──────────────────────────────────────────────────────────────
     DEFAULT_IMAGE_TYPE: Literal["png", "jpeg"]

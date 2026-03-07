@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import io
 import logging
 import struct
@@ -64,28 +65,52 @@ class ScreenshotService:
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_SCREENSHOTS)
+        self._lifecycle_lock = asyncio.Lock()
+        self._active_requests = 0
+        self._completed_requests_since_restart = 0
 
     # ── 生命周期 ─────────────────────────────────────────────────────────────
     async def start(self) -> None:
         """启动 Playwright 和浏览器。"""
+        async with self._lifecycle_lock:
+            await self._ensure_browser_unlocked()
+
+    async def _ensure_browser(self) -> None:
+        async with self._lifecycle_lock:
+            await self._ensure_browser_unlocked()
+
+    async def _ensure_browser_unlocked(self) -> None:
+        """在持有生命周期锁时，确保浏览器进程可用。"""
+        if self._browser and self._browser.is_connected():
+            return
+
+        if self._playwright is None:
+            logger.info(
+                "正在启动 Playwright (浏览器=%s, 无头模式=%s)",
+                settings.BROWSER_TYPE,
+                settings.HEADLESS,
+            )
+            self._playwright = await async_playwright().start()
+
         logger.info(
-            "正在启动 Playwright (浏览器=%s, 无头模式=%s)",
+            "正在启动浏览器实例 (浏览器=%s, 无头模式=%s)",
             settings.BROWSER_TYPE,
             settings.HEADLESS,
         )
-        self._playwright = await async_playwright().start()
         launcher = getattr(self._playwright, settings.BROWSER_TYPE)
         self._browser = await launcher.launch(headless=settings.HEADLESS)
+        self._completed_requests_since_restart = 0
         logger.info("浏览器已成功启动")
 
     async def stop(self) -> None:
         """关闭浏览器并停止 Playwright。"""
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
+        async with self._lifecycle_lock:
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
         logger.info("浏览器已停止")
 
     async def __aenter__(self) -> "ScreenshotService":
@@ -105,12 +130,15 @@ class ScreenshotService:
         成功时返回 :class:`ScreenshotResult`。
         失败时抛出 :class:`ScreenshotServiceError`。
         """
-        if self._browser is None:
-            raise ScreenshotServiceError("浏览器未启动", code=ErrorCode.BROWSER_ERROR)
-
         async with self._semaphore:
+            await self._ensure_browser()
+            await self._mark_request_started()
             context: Optional[BrowserContext] = None
             try:
+                if self._browser is None:
+                    raise ScreenshotServiceError(
+                        "浏览器未启动", code=ErrorCode.BROWSER_ERROR
+                    )
                 context = await self._create_context(params)
                 page = await context.new_page()
                 image_bytes = await self._render_and_capture(page, params)
@@ -127,8 +155,40 @@ class ScreenshotService:
             finally:
                 if context:
                     await context.close()
+                await self._mark_request_finished()
+                gc.collect()
 
             return self._build_result(image_bytes, params.image_type)
+
+    async def _mark_request_started(self) -> None:
+        async with self._lifecycle_lock:
+            self._active_requests += 1
+
+    async def _mark_request_finished(self) -> None:
+        async with self._lifecycle_lock:
+            self._active_requests = max(0, self._active_requests - 1)
+            self._completed_requests_since_restart += 1
+            should_restart = (
+                self._active_requests == 0
+                and settings.BROWSER_RESTART_INTERVAL > 0
+                and self._completed_requests_since_restart
+                >= settings.BROWSER_RESTART_INTERVAL
+            )
+
+        if should_restart:
+            await self._restart_browser(
+                f"已处理 {self._completed_requests_since_restart} 次截图请求"
+            )
+
+    async def _restart_browser(self, reason: str) -> None:
+        async with self._lifecycle_lock:
+            if self._active_requests != 0:
+                return
+            logger.warning("触发浏览器轮换: %s", reason)
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            await self._ensure_browser_unlocked()
 
     # ── 内部辅助函数 ───────────────────────────────────────────────────────
 

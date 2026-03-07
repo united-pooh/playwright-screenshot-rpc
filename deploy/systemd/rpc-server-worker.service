@@ -1,0 +1,22 @@
+[Unit]
+Description=RPC Screenshot Worker Service
+After=network.target redis.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/rpc-server
+EnvironmentFile=/etc/rpc-server/rpc-server.env
+ExecStart=/opt/rpc-server/.venv/bin/python -m server.worker
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+MemoryMax=1200M
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
