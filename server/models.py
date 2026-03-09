@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 from enum import IntEnum
-from dataclasses import dataclass
 from pydantic import BaseModel, Field, field_validator
 from config import settings
 

@@ -5,7 +5,6 @@ ScreenshotService 的集成测试。
 """
 
 import base64
-import struct
 
 import pytest
 import pytest_asyncio
