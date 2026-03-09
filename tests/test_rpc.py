@@ -3,11 +3,19 @@ JSON-RPC 处理层单元测试（无需真实浏览器）。
 """
 
 import json
-import pytest
-import uuid
 import time
+import uuid
+from typing import Optional
 
-from server.models import ErrorCode, JobResult, ScreenshotParams, ScreenshotResult
+import pytest
+
+from server.models import (
+    ErrorCode,
+    JobResult,
+    JobStatus,
+    ScreenshotParams,
+    ScreenshotResult,
+)
 from server.rpc_handler import RpcHandler
 from server.task_manager import TaskManager
 
@@ -16,7 +24,7 @@ class FakeTaskManager(TaskManager):
     """内存版本的任务管理器，不依赖 Redis。"""
 
     def __init__(self) -> None:
-        self.jobs = {}
+        self.jobs: dict[str, JobResult] = {}
 
     async def connect(self) -> None:
         pass
@@ -36,7 +44,9 @@ class FakeTaskManager(TaskManager):
         )
         return job_id
 
-    async def wait_for_result(self, job_id: str, timeout: int = 30) -> JobResult:
+    async def wait_for_result(
+        self, job_id: str, timeout: int = 30
+    ) -> Optional[JobResult]:
         # 模拟 Worker 处理：将状态更新为 success
         job = self.jobs.get(job_id)
         if job:
@@ -52,7 +62,12 @@ class FakeTaskManager(TaskManager):
             return job
         return None
 
-    async def update_job_status(self, job_id, status, result=None):
+    async def update_job_status(
+        self,
+        job_id: str,
+        status: JobStatus,
+        result: Optional[ScreenshotResult] = None,
+    ) -> None:
         job = self.jobs.get(job_id)
         if job:
             job.status = status
@@ -62,7 +77,7 @@ class FakeTaskManager(TaskManager):
                 if job.result.image:
                     job.result.image = None
 
-    async def get_job(self, job_id: str) -> JobResult:
+    async def get_job(self, job_id: str) -> Optional[JobResult]:
         return self.jobs.get(job_id)
 
 

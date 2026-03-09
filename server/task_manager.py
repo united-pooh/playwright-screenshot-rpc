@@ -5,7 +5,7 @@
 import json
 import time
 import uuid
-from typing import Optional
+from typing import Any, Awaitable, Optional, cast
 
 import redis.asyncio as redis
 
@@ -26,6 +26,11 @@ class TaskManager:
             raise ConnectionError(
                 "TaskManager is not connected to Redis. Call connect() first."
             )
+
+    def _client(self) -> redis.Redis:
+        """返回已连接的 Redis 客户端。"""
+        self._ensure_connected()
+        return cast(redis.Redis, self._redis)
 
     async def connect(self) -> None:
         """连接到 Redis。"""
@@ -48,7 +53,7 @@ class TaskManager:
         创建一个新任务并推入队列（原子操作）。
         返回 job_id。
         """
-        self._ensure_connected()
+        client = self._client()
         job_id = str(uuid.uuid4())
         now = time.time()
 
@@ -60,7 +65,7 @@ class TaskManager:
         task_payload = {"job_id": job_id, "params": params.model_dump()}
 
         # 使用 pipeline 确保初始状态存储和任务入队在同一个事务中执行
-        async with self._redis.pipeline(transaction=True) as pipe:
+        async with client.pipeline(transaction=True) as pipe:
             # 1. 存储初始状态
             key = f"{settings.REDIS_RESULT_PREFIX}{job_id}"
             pipe.set(
@@ -76,9 +81,9 @@ class TaskManager:
 
     async def get_job(self, job_id: str) -> Optional[JobResult]:
         """从 Redis 获取任务状态和结果。"""
-        self._ensure_connected()
+        client = self._client()
         key = f"{settings.REDIS_RESULT_PREFIX}{job_id}"
-        data = await self._redis.get(key)
+        data = await client.get(key)
         if not data:
             return None
         return JobResult.model_validate_json(data)
@@ -90,7 +95,7 @@ class TaskManager:
         更新任务状态及结果，并通知等待者。
         按照要求：结果图片不存回 Redis 待取，仅通过结果队列返回。
         """
-        self._ensure_connected()
+        client = self._client()
         job = await self.get_job(job_id)
         if not job:
             return
@@ -102,8 +107,8 @@ class TaskManager:
         # 1. 如果任务完成，通过临时结果队列发送包含完整数据（含图片）的结果
         if status in ("success", "failed"):
             result_key = f"{self.RESULT_QUEUE_PREFIX}{job_id}"
-            await self._redis.rpush(result_key, job.model_dump_json())
-            await self._redis.expire(result_key, 60)
+            await cast(Awaitable[int], client.rpush(result_key, job.model_dump_json()))
+            await cast(Awaitable[bool], client.expire(result_key, 60))
 
         # 2. 存回持久化状态时，移除图片数据以节省 Redis 空间 (用后即焚)
         if job.result and job.result.image:
@@ -117,29 +122,35 @@ class TaskManager:
         """
         等待任务完成并返回结果。
         """
-        self._ensure_connected()
+        client = self._client()
         result_key = f"{self.RESULT_QUEUE_PREFIX}{job_id}"
         # 使用 BLPOP 阻塞等待结果
-        result = await self._redis.blpop(result_key, timeout=timeout)
+        result = await cast(
+            Awaitable[Optional[list[str]]],
+            client.blpop([result_key], timeout=timeout),
+        )
         if result:
             _, data = result
             return JobResult.model_validate_json(data)
         return None
 
     async def _set_result(self, job_id: str, job: JobResult) -> None:
-        self._ensure_connected()
+        client = self._client()
         key = f"{settings.REDIS_RESULT_PREFIX}{job_id}"
-        await self._redis.set(
+        await client.set(
             key, job.model_dump_json(), ex=settings.REDIS_RESULT_TTL_SECONDS
         )
 
-    async def pop_task(self, timeout: int = 5) -> Optional[dict]:
+    async def pop_task(self, timeout: int = 5) -> Optional[dict[str, Any]]:
         """
         (Worker 使用) 从队列中阻塞式获取一个任务。
         """
-        self._ensure_connected()
-        result = await self._redis.blpop(settings.REDIS_TASK_QUEUE, timeout=timeout)
+        client = self._client()
+        result = await cast(
+            Awaitable[Optional[list[str]]],
+            client.blpop([settings.REDIS_TASK_QUEUE], timeout=timeout),
+        )
         if result:
             _, payload = result
-            return json.loads(payload)
+            return cast(dict[str, Any], json.loads(payload))
         return None

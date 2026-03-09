@@ -47,3 +47,6 @@ python_files = "test_*.py"
 
 [tool.coverage.run]
 source = ["server"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]

@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import sys
+from typing import Optional
 
 from aiohttp import web
 
@@ -27,6 +30,97 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+TASK_MANAGER_APP_KEY = web.AppKey("task_manager", TaskManager)
+RPC_HANDLER_APP_KEY = web.AppKey("rpc_handler", RpcHandler)
+
+
+class WorkerSubprocessManager:
+    """托管 `server.worker` 子进程的轻量管理器。"""
+
+    def __init__(
+        self,
+        python_executable: Optional[str] = None,
+        restart_delay_seconds: float = 3.0,
+    ) -> None:
+        self._python_executable = python_executable or sys.executable
+        self._restart_delay_seconds = restart_delay_seconds
+        self._process: Optional[asyncio.subprocess.Process] = None
+        self._watch_task: Optional[asyncio.Task[None]] = None
+        self._stopping = False
+
+    async def start(self) -> None:
+        if self._watch_task and not self._watch_task.done():
+            return
+
+        self._stopping = False
+        await self._spawn_worker()
+        self._watch_task = asyncio.create_task(self._watch_worker())
+
+    async def stop(self) -> None:
+        self._stopping = True
+
+        watch_task = self._watch_task
+        self._watch_task = None
+        if watch_task:
+            watch_task.cancel()
+
+        process = self._process
+        self._process = None
+        if process and process.returncode is None:
+            logger.info("正在停止托管 Worker 子进程 (pid=%s)", process.pid)
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "托管 Worker 子进程未在超时内退出，发送 SIGKILL (pid=%s)",
+                    process.pid,
+                )
+                process.kill()
+                await process.wait()
+
+        if watch_task:
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_task
+
+    async def _spawn_worker(self) -> None:
+        process = await asyncio.create_subprocess_exec(
+            self._python_executable,
+            "-m",
+            "server.worker",
+        )
+        self._process = process
+        logger.info("已拉起托管 Worker 子进程 (pid=%s)", process.pid)
+
+    async def _watch_worker(self) -> None:
+        while not self._stopping:
+            process = self._process
+            if process is None:
+                return
+
+            returncode = await process.wait()
+            self._process = None
+            if self._stopping:
+                return
+
+            logger.warning(
+                "托管 Worker 子进程异常退出 (pid=%s, returncode=%s)，%.0f 秒后重启",
+                process.pid,
+                returncode,
+                self._restart_delay_seconds,
+            )
+            await asyncio.sleep(self._restart_delay_seconds)
+            if self._stopping:
+                return
+
+            try:
+                await self._spawn_worker()
+            except Exception:
+                logger.exception("重启托管 Worker 子进程失败")
+                await asyncio.sleep(self._restart_delay_seconds)
+
+
+WORKER_MANAGER_APP_KEY = web.AppKey("worker_manager", WorkerSubprocessManager)
 
 
 # ── aiohttp 请求处理程序 ──────────────────────────────────────────────────
@@ -59,7 +153,7 @@ async def handle_rpc(request: web.Request) -> web.Response:
             status=405,
         )
 
-    handler: RpcHandler = request.app["rpc_handler"]
+    handler: RpcHandler = request.app[RPC_HANDLER_APP_KEY]
     # ... 原有逻辑 ...
 
     try:
@@ -108,8 +202,8 @@ async def handle_health(_request: web.Request) -> web.Response:
 def build_app(task_manager: TaskManager) -> web.Application:
     """构建并配置 aiohttp 应用程序。"""
     app = web.Application()
-    app["task_manager"] = task_manager
-    app["rpc_handler"] = RpcHandler(task_manager)
+    app[TASK_MANAGER_APP_KEY] = task_manager
+    app[RPC_HANDLER_APP_KEY] = RpcHandler(task_manager)
 
     app.router.add_get("/", handle_health)
     app.router.add_route("*", "/rpc", handle_rpc)
@@ -121,13 +215,24 @@ def build_app(task_manager: TaskManager) -> web.Application:
 
 
 async def _on_startup(app: web.Application) -> None:
-    task_manager: TaskManager = app["task_manager"]
+    task_manager: TaskManager = app[TASK_MANAGER_APP_KEY]
     await task_manager.connect()
+    if settings.AUTO_START_WORKER:
+        worker_manager = WorkerSubprocessManager()
+        app[WORKER_MANAGER_APP_KEY] = worker_manager
+        await worker_manager.start()
+        logger.info("API 服务已启动，Redis 已连接，托管 Worker 已拉起")
+        return
+
     logger.info("API 服务已启动，Redis 已连接")
 
 
 async def _on_cleanup(app: web.Application) -> None:
-    task_manager: TaskManager = app["task_manager"]
+    worker_manager: Optional[WorkerSubprocessManager] = app.get(WORKER_MANAGER_APP_KEY)
+    if worker_manager:
+        await worker_manager.stop()
+
+    task_manager: TaskManager = app[TASK_MANAGER_APP_KEY]
     await task_manager.disconnect()
     logger.info("API 服务已停止，Redis 连接已断开")
 

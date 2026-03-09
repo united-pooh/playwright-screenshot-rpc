@@ -49,11 +49,18 @@ python server/main.py
 |--------------------|----------------|------------------------------------------|
 | `HOST`             | `0.0.0.0`      | 绑定地址                                 |
 | `PORT`             | `8080`         | 监听端口                                 |
+| `MAX_CONCURRENT_SCREENSHOTS` | — | 单个 Worker 允许同时处理的截图数；2C2G 机器建议固定为 `1` |
+| `AUTO_START_WORKER` | `false`       | 是否在 `server.main` 启动时自动拉起一个托管 Worker 子进程 |
 | `BROWSER_TYPE`     | `chromium`     | 浏览器类型：`chromium`, `firefox` 或 `webkit` |
 | `HEADLESS`         | `true`         | 是否以无头模式运行浏览器                   |
 | `VIEWPORT_WIDTH`   | `1280`         | 默认视口宽度                             |
 | `VIEWPORT_HEIGHT`  | `720`          | 默认视口高度                             |
-| `BROWSER_RESTART_INTERVAL` | `200`   | Worker 中浏览器累计处理多少次截图后主动重建 |
+| `BROWSER_RESTART_INTERVAL` | `200`   | Worker 中 Playwright 运行时累计处理多少次截图后全量重建 |
+| `WORKER_MAX_TASKS` | `0`            | Worker 累计完成多少个任务后在空闲点主动退出并交给 `systemd` 拉起 |
+| `WORKER_MAX_AGE_SECONDS` | `0`     | Worker 最长运行时长（秒）；达到后在空闲点主动退出 |
+| `WORKER_MAX_RSS_MB` | `0`           | Worker RSS 内存阈值（MiB）；达到后在空闲点主动退出 |
+| `DEFAULT_TIMEOUT_MS` | —           | 单次截图默认超时（毫秒）                 |
+| `DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT` | — | `wait_for_selector` 默认超时（毫秒） |
 | `LOG_LEVEL`        | `INFO`         | 日志级别：`DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ---
@@ -246,17 +253,23 @@ pytest --cov=server --cov-report=term-missing
 
 仓库内已经加入两项直接措施：
 
-1. `ScreenshotService` 现在会按 `BROWSER_RESTART_INTERVAL` 定期重建浏览器实例，避免单个 Chromium 长时间累积内存。
-2. 提供了 `systemd` 服务文件，进程被 OOM 杀掉或服务器重启后会自动拉起。
+1. `ScreenshotService` 现在会按 `BROWSER_RESTART_INTERVAL` 定期全量重建 `browser + playwright` 运行时，避免单个 Chromium/driver 长时间累积内存。
+2. Worker 支持按任务数、运行时长和 RSS 内存阈值在空闲点主动退出，再由 `systemd` 自动拉起新进程。
+3. 提供了 `systemd` 服务文件，进程异常退出、被 OOM 杀掉或服务器重启后会自动拉起。
 
 建议在线上环境这样配置：
 
 ```bash
 MAX_CONCURRENT_SCREENSHOTS=1
-BROWSER_RESTART_INTERVAL=100
+BROWSER_RESTART_INTERVAL=50
+WORKER_MAX_TASKS=200
+WORKER_MAX_AGE_SECONDS=14400
+WORKER_MAX_RSS_MB=750
 DEFAULT_TIMEOUT_MS=15000
 DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT=5000
 ```
+
+2C2G 机器建议只运行 1 个 Worker 进程实例，不额外限制 Redis 队列任务数量。排队交给 Redis，单机内存稳定性依赖单 Worker 串行处理、浏览器轮换和 Worker 周期回收。
 
 如果卡片模板经常引用远程图片、Web 字体或复杂阴影/滤镜，建议再做这几件事：
 
@@ -283,3 +296,11 @@ DEFAULT_WAIT_FOR_SELECTOR_TIMEOUT=5000
 1. 服务器重启后自动启动 API 和 Worker。
 2. 进程异常退出后自动重启。
 3. 可以通过 `MemoryMax` 对 API 与 Worker 分别做内存上限约束。
+
+如果你只是本地运行，想省去手动再开一个 Worker，可以设置：
+
+```bash
+AUTO_START_WORKER=true
+```
+
+这样 `python -m server.main` 会自动拉起一个托管 Worker 子进程，并在它异常退出后自动重启。

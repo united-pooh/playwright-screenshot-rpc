@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from server.models import (
     ErrorCode,
-    JobResponse,
     JsonRpcError,
     JsonRpcRequest,
     JsonRpcResponse,
@@ -49,7 +48,9 @@ class RpcHandler:
 
     # ── 公共入口点 ────────────────────────────────────────────────────
 
-    async def handle(self, raw: bytes | str | dict) -> dict:
+    async def handle(
+        self, raw: bytes | str | dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         """
         处理 JSON-RPC 请求。
 
@@ -93,7 +94,7 @@ class RpcHandler:
 
         except _RpcError as exc:
             return self._error_response(rpc_id, exc.code, exc.message, exc.data)
-        except Exception as exc:
+        except Exception:
             logger.exception("RpcHandler 捕获到未处理的异常 (ID: %r)", rpc_id)
             return self._error_response(
                 rpc_id,
@@ -105,7 +106,7 @@ class RpcHandler:
     # ── 解码与验证 ─────────────────────────────────────────────────────
 
     @staticmethod
-    def _decode(raw: bytes | str | dict) -> dict:
+    def _decode(raw: bytes | str | dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw, dict):
             return raw
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
@@ -143,7 +144,7 @@ class RpcHandler:
         code: int,
         message: str,
         data: Optional[Any] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         resp = JsonRpcResponse(
             id=rpc_id,
             error=JsonRpcError(code=code, message=message, data=data),
@@ -161,7 +162,9 @@ class RpcHandler:
 
 
 @rpc_method("screenshot")
-async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
+async def _handle_screenshot(
+    task_manager: TaskManager, params: dict[str, Any]
+) -> dict[str, Any]:
     """
     执行截图任务并同步返回结果。
     """
@@ -192,7 +195,7 @@ async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
     if job.status == "failed":
         raise _RpcError(
             ErrorCode.SCREENSHOT_FAILED,
-            job.result.error if job.result else "任务执行失败",
+            job.result.error if job.result and job.result.error else "任务执行失败",
             data={"job_id": job_id},
         )
 
@@ -204,7 +207,9 @@ async def _handle_screenshot(task_manager: TaskManager, params: dict) -> dict:
 
 
 @rpc_method("get_job_status")
-async def _handle_get_job_status(task_manager: TaskManager, params: dict) -> dict:
+async def _handle_get_job_status(
+    task_manager: TaskManager, params: dict[str, Any]
+) -> dict[str, Any]:
     """查询异步任务的状态和结果。"""
     job_id = params.get("job_id")
     if not job_id:
@@ -220,8 +225,8 @@ async def _handle_get_job_status(task_manager: TaskManager, params: dict) -> dic
 @rpc_method("ping")
 async def _handle_ping(
     task_manager: TaskManager,
-    params: dict,  # noqa: ARG001
-) -> dict:
+    params: dict[str, Any],  # noqa: ARG001
+) -> dict[str, Any]:
     """健康检查。"""
     return {"pong": True}
 
@@ -229,8 +234,8 @@ async def _handle_ping(
 @rpc_method("get_methods")
 async def _handle_get_methods(
     task_manager: TaskManager,
-    params: dict,  # noqa: ARG001
-) -> dict:
+    params: dict[str, Any],  # noqa: ARG001
+) -> dict[str, Any]:
     """返回可用方法列表。"""
     return {"methods": sorted(_METHOD_REGISTRY.keys())}
 

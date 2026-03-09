@@ -14,7 +14,7 @@ Restart=always
 RestartSec=3
 KillSignal=SIGTERM
 TimeoutStopSec=30
-MemoryMax=512M
+MemoryMax=384M
 NoNewPrivileges=true
 PrivateTmp=true
 

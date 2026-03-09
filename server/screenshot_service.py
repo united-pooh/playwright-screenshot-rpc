@@ -105,12 +105,7 @@ class ScreenshotService:
     async def stop(self) -> None:
         """关闭浏览器并停止 Playwright。"""
         async with self._lifecycle_lock:
-            if self._browser:
-                await self._browser.close()
-                self._browser = None
-            if self._playwright:
-                await self._playwright.stop()
-                self._playwright = None
+            await self._shutdown_runtime_unlocked()
         logger.info("浏览器已停止")
 
     async def __aenter__(self) -> "ScreenshotService":
@@ -185,16 +180,27 @@ class ScreenshotService:
             if self._active_requests != 0:
                 return
             logger.warning("触发浏览器轮换: %s", reason)
-            if self._browser:
-                await self._browser.close()
-                self._browser = None
+            await self._shutdown_runtime_unlocked()
             await self._ensure_browser_unlocked()
+
+    async def _shutdown_runtime_unlocked(self) -> None:
+        """在持有生命周期锁时关闭整个 Playwright 运行时。"""
+        if self._browser:
+            await self._browser.close()
+            self._browser = None
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
 
     # ── 内部辅助函数 ───────────────────────────────────────────────────────
 
     async def _create_context(self, params: ScreenshotParams) -> BrowserContext:
         """创建一个根据 *params* 配置的隔离浏览器上下文。"""
-        context = await self._browser.new_context(
+        browser = self._browser
+        if browser is None:
+            raise ScreenshotServiceError("浏览器未启动", code=ErrorCode.BROWSER_ERROR)
+
+        context = await browser.new_context(
             viewport={
                 "width": params.viewport.width,
                 "height": params.viewport.height,
@@ -209,7 +215,10 @@ class ScreenshotService:
             "**/*",
             lambda route: (
                 route.continue_()
-                if any(route.request.url.startswith(p) for p in ["data:", "http:", "https:"])
+                if any(
+                    route.request.url.startswith(p)
+                    for p in ["data:", "http:", "https:"]
+                )
                 else route.abort()
             ),
         )

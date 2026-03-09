@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     HOST: str
     PORT: int
     MAX_CONCURRENT_SCREENSHOTS: int
+    AUTO_START_WORKER: bool = True
 
     # ── Playwright 设置 ──────────────────────────────────────────────────────────
     BROWSER_TYPE: Literal["chromium", "firefox", "webkit"]
@@ -24,6 +25,9 @@ class Settings(BaseSettings):
     VIEWPORT_WIDTH: int
     VIEWPORT_HEIGHT: int
     BROWSER_RESTART_INTERVAL: int = 200
+    WORKER_MAX_TASKS: int = 0
+    WORKER_MAX_AGE_SECONDS: int = 0
+    WORKER_MAX_RSS_MB: int = 0
 
     # ── 截图默认值 ──────────────────────────────────────────────────────────────
     DEFAULT_IMAGE_TYPE: Literal["png", "jpeg"]
